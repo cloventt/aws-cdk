@@ -2865,6 +2865,62 @@ describe('bucket', () => {
     });
   });
 
+  test('Cross-stack destination inventory bucket inside a stage does not introduce cyclic dependency', () => {
+    // Given
+    const parentApp = new cdk.App();
+    const parentStage = new cdk.Stage(parentApp, 'parent-stage');
+    const inventoryStack = new cdk.Stack(parentStage, 'inv-stack');
+    const bucketStack = new cdk.Stack(parentStage, 'bucket-stack');
+
+    const inventoryBucket = new s3.Bucket(inventoryStack, 'InventoryBucket');
+    inventoryBucket.addToResourcePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      principals: [
+        new iam.ServicePrincipal('s3.amazonaws.com'),
+      ],
+      actions: [
+        's3:PutObject',
+      ],
+      resources: [
+        inventoryBucket.arnForObjects('*'),
+      ],
+      conditions: [
+        {
+          StringEquals: {
+            's3:x-amz-acl': 'bucket-owner-full-control',
+          },
+        },
+      ],
+    }));
+
+    new s3.Bucket(bucketStack, 'MyBucket', {
+      inventories: [
+        {
+          destination: {
+            bucket: inventoryBucket,
+          },
+        },
+      ],
+    });
+
+
+    // Then
+    parentApp.synth(); // check for cyclic dependency
+
+    Template.fromStack(inventoryStack).hasResourceProperties('AWS::S3::Bucket', {});
+
+    Template.fromStack(bucketStack).hasResourceProperties('AWS::S3::Bucket', {
+      InventoryConfigurations: [
+        {
+          Destination: {
+            BucketArn: { 'Fn::GetAtt': ['InventoryBucketA869B8CB', 'Arn'] },
+          },
+          Id: 'MyBucketInventory0',
+        },
+      ],
+    });
+  });
+
   test('Bucket with objectOwnership set to BUCKET_OWNER_ENFORCED', () => {
     const stack = new cdk.Stack();
     new s3.Bucket(stack, 'MyBucket', {
